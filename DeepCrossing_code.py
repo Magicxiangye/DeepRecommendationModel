@@ -79,7 +79,55 @@ def build_input_layers(feature_columns):
 
 # 嵌入层，类别特征数据将进行一下嵌入化
 def build_embedding_layers(feature_columns, input_layers_dict, is_linear):
-    pass
+    # 定义一个embedding层对应的字典
+    embedding_layers_dict = dict()
+    # filter() 函数用于过滤序列，过滤掉不符合条件的元素，返回由符合条件元素组成的新列表。
+    # 该接收两个参数，第一个为函数，第二个为序列，序列的每个元素作为参数传递给函数进行判断，
+    # 然后返回 True 或 False，最后将返回 True 的元素放到新列表中。
+    # 将特征中的sparse特征筛选出来
+    sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), feature_columns))\
+        if feature_columns else []
+    # 如果是用于线性部分的embedding层，其维度为1，
+    # 否则维度就是自己定义的embedding维度
+    if is_linear:
+        # 用于线性部分的维度直接为1
+        for fc in sparse_feature_columns:
+            # Kreas的嵌入层
+            embedding_layers_dict[fc.name] = Embedding(fc.vocabulary_size + 1, 1, name='1d_emb_' + fc.name)
+        else:
+            for fc in sparse_feature_columns:
+                # 不是线性的就是自定义的维度
+                embedding_layers_dict[fc.name] = Embedding(fc.vocabulary_size + 1,
+                                                           fc.embedding_dim, name='kd_emb' + fc.name)
+
+        # 输出嵌入层的字典
+        return embedding_layers_dict
+
+
+# 网络的特征数据拼接
+def concat_embedding_list(feature_columns, input_layer_dict, embedding_layer_dict, flatten= False):
+    # 将sparse(类别特征筛选出来)
+    sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), feature_columns))
+
+    embedding_list = []
+    for fc in sparse_feature_columns:
+        # 获取网络所需要的输入
+        # 获取输入层
+        _input = input_layer_dict[fc.name]
+        # B x 1 x dim  获取对应的embedding层
+        _embed = embedding_layer_dict[fc.name]
+        # B x dim  将input层输入到embedding层中
+        embed = _embed(_input)
+        # Flatten层用来将输入“压平”，即把多维的输入一维化，
+        # 常用在从卷积层到全连接层的过渡。Flatten不影响batch的大小。
+        # 是否需要flatten, 如果embedding列表最终是直接输入到Dense层中，
+        # 需要进行Flatten，否则不需要(直接为stacking层则不需要压平)
+        if flatten:
+            embed = Flatten()(embed)
+        # 嵌入层的生成数据
+        embedding_list.append(embed)
+    # 输出
+    return embedding_list
 
 
 
