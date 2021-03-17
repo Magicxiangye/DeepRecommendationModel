@@ -4,7 +4,7 @@
 import warnings
 warnings.filterwarnings("ignore")
 
-# 这个用的是Keras（第一次用这个框架）
+# 这个用的是Keras（第一次用这个框架）(写的有点乱)
 from tensorflow import keras
 # layers和model的引入
 from tensorflow.keras.layers import *
@@ -56,6 +56,8 @@ def data_process(data_df, dense_features, sparse_features):
     return data_df[dense_features + sparse_features]
 
 # 数据输入层
+# Keras:Input()函数
+# 作用：初始化深度学习网络输入层的tensor
 def build_input_layers(feature_columns):
     """
         构建输入层
@@ -69,6 +71,7 @@ def build_input_layers(feature_columns):
         # 是类别特征的话，加入类别特征的字典
         if isinstance(fc, SparseFeat):
             # Input():用来实例化一个keras张量
+            # 每一个的tensor的name是独一无二的
             sparse_inputs_dict[fc.name] = Input(shape=(1,), name=fc.name)
         elif isinstance(fc, DenseFeat):
             dense_inputs_dict[fc.name] = Input(shape=(fc.dimension,), name=fc.name)
@@ -93,12 +96,13 @@ def build_embedding_layers(feature_columns, input_layers_dict, is_linear):
         # 用于线性部分的维度直接为1
         for fc in sparse_feature_columns:
             # Kreas的嵌入层
+            # Embedding层的前两个参数是词汇表大小和词向量的维度
             embedding_layers_dict[fc.name] = Embedding(fc.vocabulary_size + 1, 1, name='1d_emb_' + fc.name)
         else:
             for fc in sparse_feature_columns:
                 # 不是线性的就是自定义的维度
                 embedding_layers_dict[fc.name] = Embedding(fc.vocabulary_size + 1,
-                                                           fc.embedding_dim, name='kd_emb' + fc.name)
+                                                           fc.embedding_dim, name='kd_emb_' + fc.name)
 
         # 输出嵌入层的字典
         return embedding_layers_dict
@@ -129,11 +133,91 @@ def concat_embedding_list(feature_columns, input_layer_dict, embedding_layer_dic
     # 输出
     return embedding_list
 
+# DNN残差块的定义
+# 通过继承Layer来实现自己的自定义层。
+class ResidualBlock(Layer):
+    # units表示的是DNN隐藏层神经元数量
+    def __init__(self, units):
+        # 自己变为自己的父类，调用自己的初始化方法
+        super(ResidualBlock, self).__init__()
+        self.units = units
 
+    # DNN残差块的内部结构
+    # 使用的是多层的全连接的网络
+    # 定义权重的方法
+    def build(self, input_shape):
+        # 输出数据的维度
+        out_dim = input_shape[-1]
+        # 两层的神经网络的结构
+        # 使用的是tensorflow.keras.layer.Dense
+        # 它是Keras定义网络层的基本方法，(具体的参数用到的去看官方的文档)
+        self.dnn1 = Dense(self.units, activation='relu')
+        # 保证输入的维度和输出的维度一致才能进行残差连接
+        self.dnn2 = Dense(out_dim, activation='relu')
 
+    # 残差块的使用结构流程
+    # call(x)是定义层功能的
+    # 定义了具体的计算过程,x为输入值
+    # 除非你希望你写的层支持masking，
+    # 否则你只需要关心call的第一个参数：输入张量。
+    # #注意：如果输出形状不变，则不需要；
+    # 如果输出的形状发生改变，一定要return 出最后的shape
+    # def compute_output_shape(self, input_shape):
+    #     return (input_shape[0], 165, 165)
+    def call(self, inputs):
+        x = inputs
+        x = self.dnn1(x)
+        x = self.dnn2(x)
+        # 残差的连接操作
+        x = Activation('relu')(x + inputs)
+        return x
 
+# 最后的Scoring层
+# 使用的是逻辑回归的分类方法
+# block_nums表示DNN残差块的数量
+def get_dnn_logits(dnn_inputs, block_nums=3):
+    dnn_out = dnn_inputs
+    for i in range(block_nums):
+        dnn_out = ResidualBlock(64)(dnn_out)
+    # 将dnn的输出转化为logits
+    dnn_logits = Dense(1, activation='sigmoid')(dnn_out)
 
+    return dnn_logits
 
+# 网络的具体构架
+def DeepCrossing(dnn_feature_columns):
+    # 构建输入层，即所有特征对应的Input()层，这里使用字典的形式返回，
+    # 方便后续构建模型
+    dense_input_dict, sparse_input_dict = build_input_layers(dnn_feature_columns)
+    # 构建模型的输入层，模型的输入层不能是字典的形式，
+    # 应该将字典的形式转换成列表的形式
+    # 注意：这里实际的输入与Input()层的对应，
+    # 是通过模型输入时候的字典数据的key与对应name的Input层
+    input_layers = list(dense_input_dict.values()) + list(sparse_input_dict.values())
+    # 构建维度为k的embedding层(K为数据集中类别特征的个数)，这里使用字典的形式返回，
+    # 方便后面搭建模型
+    embedding_layer_dict = build_embedding_layers(dnn_feature_columns, sparse_input_dict, is_linear=False)
+    # 先将dense特征拼接在一起
+    dense_dnn_list = list(dense_input_dict.values())
+    # axis拼接的维度
+    # B x n (n表示数值特征的数量,B为多少条数据)
+    dense_dnn_inputs = Concatenate(axis=1)(dense_dnn_list)
+    # 因为需要将其与dense特征拼接到一起所以需要Flatten
+    # 不进行Flatten的Embedding层输出的维度为：B x 1 x dim
+    sparse_dnn_list = concat_embedding_list(dnn_feature_columns, sparse_input_dict, embedding_layer_dict, flatten=True)
+    # B x m*dim (n表示类别特征的数量，dim表示embedding的维度)
+    sparse_dnn_inputs = Concatenate(axis=1)(sparse_dnn_list)
 
+    # 将dense和sparse数据最后拼接
+    # 最后的维度  B x (n + m*dim)
+    dnn_inputs = Concatenate(axis=1)([dense_dnn_inputs, sparse_dnn_inputs])
+    # 输入到dnn中，需要提前定义要的几个残差块
+    output_layer = get_dnn_logits(dnn_inputs, block_nums=3)
+
+    # 定义模型
+    model = Model(input_layers, output_layer)
+    return model
+
+# 使用的操作
 if __name__ == "__main__":
     pass
