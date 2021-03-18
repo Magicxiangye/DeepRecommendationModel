@@ -4,9 +4,17 @@
 import warnings
 warnings.filterwarnings("ignore")
 
+# 进度条的显示
+import itertools
+from tqdm import tqdm
+
+# 具名以元组
+from collections import namedtuple
+
 # 这个用的是Keras（第一次用这个框架）(写的有点乱)
 from tensorflow import keras
 # layers和model的引入
+from tensorflow import keras
 from tensorflow.keras.layers import *
 from tensorflow.keras.models import *
 import pandas as pd
@@ -18,6 +26,8 @@ from utils import SparseFeat, VarLenSparseFeat, DenseFeat
 # 用于数据的预处理
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 
+# 数据集的分割方式
+from sklearn.model_selection import train_test_split
 # 模型的函数的定义
 # 数据的预处理函数
 def data_process(data_df, dense_features, sparse_features):
@@ -88,8 +98,7 @@ def build_embedding_layers(feature_columns, input_layers_dict, is_linear):
     # 该接收两个参数，第一个为函数，第二个为序列，序列的每个元素作为参数传递给函数进行判断，
     # 然后返回 True 或 False，最后将返回 True 的元素放到新列表中。
     # 将特征中的sparse特征筛选出来
-    sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), feature_columns))\
-        if feature_columns else []
+    sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), feature_columns)) if feature_columns else []
     # 如果是用于线性部分的embedding层，其维度为1，
     # 否则维度就是自己定义的embedding维度
     if is_linear:
@@ -98,14 +107,13 @@ def build_embedding_layers(feature_columns, input_layers_dict, is_linear):
             # Kreas的嵌入层
             # Embedding层的前两个参数是词汇表大小和词向量的维度
             embedding_layers_dict[fc.name] = Embedding(fc.vocabulary_size + 1, 1, name='1d_emb_' + fc.name)
-        else:
-            for fc in sparse_feature_columns:
-                # 不是线性的就是自定义的维度
-                embedding_layers_dict[fc.name] = Embedding(fc.vocabulary_size + 1,
-                                                           fc.embedding_dim, name='kd_emb_' + fc.name)
+    else:
+        for fc in sparse_feature_columns:
+            # 不是线性的就是自定义的维度
+            embedding_layers_dict[fc.name] = Embedding(fc.vocabulary_size + 1, fc.embedding_dim, name='kd_emb_' + fc.name)
 
-        # 输出嵌入层的字典
-        return embedding_layers_dict
+    # 输出嵌入层的字典
+    return embedding_layers_dict
 
 
 # 网络的特征数据拼接
@@ -220,4 +228,47 @@ def DeepCrossing(dnn_feature_columns):
 
 # 使用的操作
 if __name__ == "__main__":
-    pass
+    # 读取数据
+    data = pd.read_csv('./data/criteo_sample.txt')
+
+    # 划分dense和sparse特征
+    columns = data.columns.values
+    # I为数值特征
+    # C为类别特征
+    dense_features = [feat for feat in columns if 'I' in feat]
+    sparse_features = [feat for feat in columns if 'C' in feat]
+
+    # 简单的数据预处理
+    # 补缺失值，以及标签化类别特征的值
+    train_data = data_process(data, dense_features, sparse_features)
+    # 最后的标签的定义还是要传输的
+    # Python的浅拷贝子对象还是指向统一对象
+    # data is train_data    >>>True
+    # 深度拷贝需要引入copy模块   b = copy.deepcopy(a)---深度拷贝的这两个是完全独立的
+    train_data['label'] = data['label']
+
+    # 将特征做标记
+    # 具名元组可以像类一样定义
+    # vocabulary_size是每列特征的唯一值的统计量
+    dnn_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].nunique(), embedding_dim=4)
+                           for feat in sparse_features] + [DenseFeat(feat, 1, )
+                                                           for feat in dense_features]
+
+    # 构建DeepCrossing模型
+    # 返回的是model
+    history = DeepCrossing(dnn_feature_columns)
+
+    # model.summary()输出模型各层的参数状况
+    history.summary()
+    # 模型优化的定义，损失函数，优化器的选择
+    # metrics: 评价函数,与损失函数类似,只不过评价函数的结果不会用于训练过程中,可以传递已有的评价函数名称,或者传递一个自定义的
+    history.compile(optimizer="adam",
+                    loss="binary_crossentropy",
+                    metrics=["binary_crossentropy", tf.keras.metrics.AUC(name='auc')])
+
+    # 将输入数据转化成字典的形式输入
+    train_model_input = {name: data[name] for name in dense_features + sparse_features}
+    # 模型训练
+    # keras.model.fit()函数
+    history.fit(train_model_input, train_data['label'].values,
+                batch_size=64, epochs=5, validation_split=0.2, )
