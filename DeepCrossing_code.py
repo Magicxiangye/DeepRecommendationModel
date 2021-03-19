@@ -12,6 +12,7 @@ from tqdm import tqdm
 from collections import namedtuple
 
 # 这个用的是Keras（第一次用这个框架）(写的有点乱)
+# 2021.03.14
 from tensorflow import keras
 # layers和model的引入
 from tensorflow import keras
@@ -117,6 +118,7 @@ def build_embedding_layers(feature_columns, input_layers_dict, is_linear):
 
 
 # 网络的特征数据拼接
+# 嵌入数据的拼接
 def concat_embedding_list(feature_columns, input_layer_dict, embedding_layer_dict, flatten= False):
     # 将sparse(类别特征筛选出来)
     sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), feature_columns))
@@ -251,7 +253,7 @@ if __name__ == "__main__":
     # 具名元组可以像类一样定义
     # vocabulary_size是每列特征的唯一值的统计量
     dnn_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].nunique(), embedding_dim=4)
-                           for feat in sparse_features] + [DenseFeat(feat, 1, )
+                           for feat in sparse_features] + [DenseFeat(feat, 1)
                                                            for feat in dense_features]
 
     # 构建DeepCrossing模型
