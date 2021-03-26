@@ -143,6 +143,62 @@ def get_dnn_logit(dense_input_dict, sparse_input_dict, sparse_feature_columns, d
     # (Batch_size * dense_feature_num *dense-feature_dimension)
     concat_dense_inputs = Concatenate(axis=1)(list(dense_input_dict.values()))
 
+    sparse_kd_embed = concat_embedding_list(sparse_feature_columns, sparse_input_dict, dnn_embedding_layers, flatten=True)
+    concat_sparse_kd_embed = Concatenate(axis=1)(sparse_kd_embed)
+    # 所有嵌入层的拼接
+    # B x (n2k + n1)(列的拼接)
+    dnn_input = Concatenate(axis=1)([concat_dense_inputs, concat_sparse_kd_embed])
+    # dnn的设置（dropout参数也有设置）
+    dnn_out = Dropout(0.5)(Dense(1024, activation='relu')(dnn_input))
+    # dnn的层数可以自己去定义
+    dnn_out = Dropout(0.3)(Dense(512, activation='relu')(dnn_out))
+    dnn_out = Dropout(0.1)(Dense(256, activation='relu')(dnn_out))
 
+    dnn_logits = Dense(1)(dnn_out)
+
+    return dnn_logits
+
+# WideNDeep模型的流程
+def WideNDeep(linear_feature_columns, dnn_feature_columns):
+    # 分为要进两个部分的输入特征（线性的进wdie， 高阶的进dnn部分）
+    # 构建输入层，即所有特征对应的Input()层，
+    # 这里使用字典的形式返回，方便后续构建模型
+    # 第一步，输入层（构建好的是输入层的字典)
+    dense_input_dict, sparse_input_dict = build_input_layers(linear_feature_columns + dnn_feature_columns)
+    # 在线性部分中，把离散的特征（sparse_feature先分离出来）
+    # 要先进行嵌入加压缩与linear_dense_feature进行拼接
+    linear_sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), linear_feature_columns))
+
+    # 模型先是要构建输入层（模型的输入层不能是字典的形式）
+    # 应该将字典的形式转换成列表的形式
+    # 注意：这里实际的输入与Input()层的对应，
+    # 是通过模型输入时候的字典数据的key与对应name的Input层
+    input_layers = list(dense_input_dict.values()) + list(sparse_input_dict.values())
+    # 模型的Wid部分使用的特征比较简单，并且得到的特征非常的稀疏，
+    # 所以使用了FTRL优化Wide部分（这里没有实现FTRL）
+    # 模型中是将所有的可能用到的特征都输入到Wide部分，具体的细节可以根据需求进行修改
+    linear_logits = get_linear_logits(dense_input_dict, sparse_input_dict, linear_sparse_feature_columns)
+
+    # Deep部分，首先就是要构建sparse_feature的embedding层
+    # embedding层先定义
+    embedding_layers = build_embedding_layers(dnn_feature_columns, sparse_input_dict, is_linear=False)
+
+    # 还是先分离出进入dnn网络的 sparse_feature
+    dnn_sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), dnn_feature_columns))
+    # 在Wide&Deep模型中，
+    # deep部分的输入是将dense特征和embedding特征拼在一起输入到dnn中
+    dnn_logits = get_dnn_logit(dense_input_dict, sparse_input_dict, dnn_sparse_feature_columns, embedding_layers)
+
+    # 将linear,dnn的logits相加作为最终的logits
+    output_logits = Add()([linear_logits, dnn_logits])
+
+    # 最后要输出的是一个几率（激活函数用到的就是sigmoid）
+    output_layer = Activation("sigmoid")(output_logits)
+
+    model = Model(input_layers, output_layer)
+    return model
+
+
+# 使用的流程
 if __name__ == "__main__":
     pass
