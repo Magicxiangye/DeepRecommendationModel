@@ -201,4 +201,38 @@ def WideNDeep(linear_feature_columns, dnn_feature_columns):
 
 # 使用的流程
 if __name__ == "__main__":
-    pass
+    # 训练的流程
+    # 先是读取和预处理数据
+    data = pd.read_csv('./data/criteo_sample.txt')
+
+    # 先划分数值特征和类别特征
+    columns = data.columns.values
+    dense_features = [feat for feat in columns if 'I' in feat]
+    sparse_features = [feat for feat in columns if 'C' in feat]
+
+    # 简单的数据预处理
+    train_data = data_process(dense_features, sparse_features)
+    train_data['label'] = data['label']
+
+    # 将特征分组，分成linear部分和dnn部分(根据实际场景进行选择)
+    # 生成线性和离散的特征的具名元组
+    #先是提取线性的特征的具名元组
+    linear_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].nunique(), embedding_dim=4)
+                              for i, feat in enumerate(sparse_features)] + [DenseFeat(feat, 1, ) for feat in dense_features]
+
+    # 高阶的特征数据
+    dnn_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].nunique(), embedding_dim=4)
+                           for i, feat in enumerate(sparse_features)] + [DenseFeat(feat, 1,) for feat in dense_features]
+
+    # 模型的构建
+    history = WideNDeep(linear_feature_columns, dnn_feature_columns)
+    history.summary()
+    # 使用函数和监控的对象
+    history.compile(optimizer="adam", loss="binary_crossentropy", metrics=["binary_crossentropy",
+                                                                           tf.keras.metrics.AUC(name='auc')])
+
+    # 输入数据的重组
+    # 将输入数据转化成字典的形式输入
+    train_model_input = {name: data[name] for name in dense_features + sparse_features}
+    # 输入数据,开始训练
+    history.fit(train_model_input, train_data['label'].values, batch_size=64, epoch=5, validation_split=0.2)
