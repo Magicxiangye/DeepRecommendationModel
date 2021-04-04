@@ -143,6 +143,7 @@ def get_fm_logits(sparse_input_dict, sparse_feature_columns, dnn_embedding_layer
         sparse_kd_embed.append(_embed)
 
     # 将所有sparse的embedding拼接起来，得到 (n, k)的矩阵，其中n为特征数，k为embedding大小
+    # B x n x k
     concat_sparse_kd_embed = Concatenate(axis=1)(sparse_kd_embed)
     # 进入自定义的FM层
     fm_cross_out = FM_Layer()(concat_sparse_kd_embed)
@@ -186,6 +187,71 @@ def DeepFM(linear_feature_columns, dnn_feature_columns):
 
     # 将linear部分的特征中sparse特征筛选出来，后面用来做1维的embedding
     linear_sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), linear_feature_columns))
+
+    # 构建模型的输入层，模型的输入层不能是字典的形式，应该将字典的形式转换成列表的形式
+    # 注意：这里实际的输入与Input()层的对应，是通过模型输入时候的字典数据的key与对应name的Input层
+    input_layers = list(dense_input_dict.values()) + list(sparse_input_dict.values())
+    # 先是线性特征的计算
+    linear_logits = get_linear_logits(dense_input_dict, sparse_input_dict, linear_sparse_feature_columns)
+
+    #构建自定义维度为k的嵌入层，使用嵌入层来进行FMlayer和Dnn-logits的计算
+    # 先构建嵌入层的定义
+    embedding_layers = build_embedding_layers(dnn_feature_columns, sparse_input_dict, is_linear=False)
+    # 将要输入到嵌入层的sparse_feature筛选出来进入嵌入层
+    dnn_sparse_feature_columns = list(filter(lambda x: isinstance(x, SparseFeat), dnn_feature_columns))
+    # 进入Fm_layer的计算
+    fm_logits = get_fm_logits(sparse_input_dict, dnn_sparse_feature_columns, embedding_layers)
+
+    # 接下来是深度神经网络层的学习
+    # 将所有的Embedding都拼起来，一起输入到dnn中
+    dnn_logits = get_dnn_logits(sparse_input_dict, dnn_sparse_feature_columns, embedding_layers)
+
+    # 线性，FM，dnn的输出相加作为最终的logits
+    output_logits = Add()([linear_logits, fm_logits, dnn_logits])
+    # 这里的激活函数使用sigmoid
+    output_layers = Activation("sigmoid")(output_logits)
+
+    # 建立模型
+    model = Model(input_layers, output_layers)
+    return model
+
+
+# 实验的主函数
+if __name__ == "__main__":
+    # 先是读取数据
+    data = pd.read_csv('./data/criteo_sample.txt')
+
+    # 区分出数值特征和类别特征
+    columns = data.columns.values
+    dense_features = [feat for feat in columns if "I" in feat]
+    sparse_features = [feat for feat in columns if "C" in feat]
+
+    # 数据的预处理
+    train_data = data_process(data, dense_features, sparse_features)
+    # 训练数据的结果
+    train_data['label'] = data['label']
+
+    # 将每个块需要的特征进行分组
+    # 分成linear部分和dnn部分(根据实际场景进行选择)，
+    # 并将分组之后的特征做标记（使用DenseFeat, SparseFeat）
+    # 线性的特征
+    linear_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].nunique(), embedding_dim=4)
+                              for i, feat in enumerate(sparse_features)] + [DenseFeat(feat, 1, ) for feat in dense_features]
+    # 深层的特征
+    dnn_feature_columns = [SparseFeat(feat, vocabulary_size=data[feat].nunique(), embedding_dim=4)
+                           for i, feat in enumerate(sparse_features)] + [DenseFeat(feat, 1, ) for feat in dense_features]
+
+    #构建模型，开始训练
+    history = DeepFM(linear_feature_columns, dnn_feature_columns)
+    history.summary()
+    # 需要监测的性能指标
+    history.compile(optimizer="adam", loss="binary_crossentropy", metrics=["binary_crossentropy", tf.keras.metrics.AUC(name='auc')])
+    # 将输入数据转化成字典的形式输入
+    train_model_input = {name: data[name] for name in dense_features + sparse_features}
+
+    # 开始训练
+    history.fit(train_model_input, train_data['label'].values, batch_size=64, epoch=5, validation_split=0.2)
+
 
 
 
